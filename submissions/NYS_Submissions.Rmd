@@ -1,0 +1,108 @@
+---
+title: "New York School Poverty-Test Relationship"
+author: "Jackie Kim"
+date: '2023-09-18'
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(lubridate)
+```
+
+## Import the data
+
+```{r Import}
+nys_school <- read_csv('~/Downloads/nys_schools.csv')
+nys_acs <- read_csv('~/Downloads/nys_acs.csv')
+```
+
+## Deal with Missing Values
+```{r Check the data}
+summary(nys_school)
+```
+
+```{r Check -99 missing values}
+nys_school %>% filter(total_enroll == -99) %>% count() # Only 13 observations with missing values. Safe to remove them.
+nys_school %>% filter(per_free_lunch == -99) %>% count() # 15 observations with missing values.
+nys_school %>% filter(per_reduced_lunch == -99) %>% count() # 15 observations
+nys_school %>% filter(mean_ela_score == -99) %>% count() # 2208 observations. Think of a way to deal with them
+nys_school %>% filter(mean_math_score == -99) %>% count() # 2210 observations. Think of a way to deal with them
+nys_school_clean <- nys_school %>% filter(total_enroll != -99 & per_free_lunch != -99 & per_reduced_lunch != -99)
+summary(nys_school_clean) # Still have Mean ELA & Math Score to deal with
+```
+
+```{r Replace prominent 2.2k values with averages}
+nys_school_clean$mean_ela_score <- replace(nys_school_clean$mean_ela_score,nys_school_clean$mean_ela_score == -99, mean(nys_school_clean$mean_ela_score))
+nys_school_clean$mean_math_score <- replace(nys_school_clean$mean_math_score,nys_school_clean$mean_math_score == -99, mean(nys_school_clean$mean_math_score))
+```
+
+```{r Final Summary}
+summary(nys_school_clean)
+```
+
+```{r}
+# Outlying numbers in per free lunch & per reduce lunch
+nys_school_clean %>% filter(per_free_lunch > 1 | per_reduced_lunch > 1)
+```
+
+```{r}
+# Approach: Cut-them to be within 0-100% range. Maybe use the Median.
+nys_school_clean$per_free_lunch <- replace(nys_school_clean$per_free_lunch,nys_school_clean$per_free_lunch > 1, median(nys_school_clean$per_free_lunch))
+nys_school_clean$per_reduced_lunch <- replace(nys_school_clean$per_reduced_lunch,nys_school_clean$per_reduced_lunch > 1, median(nys_school_clean$per_reduced_lunch))
+```
+
+```{r Final Summary V2.0}
+summary(nys_school_clean)
+```
+
+## Categorizing Poverty Level in Counties
+
+```{r}
+county <- nys_acs
+county$poverty_level <- cut(county$county_per_poverty,
+                            breaks=c(-Inf,0.075,0.2,Inf),
+                            labels=c('low','medium','high'))
+```
+
+## Z-Score Standardization
+```{r}
+nys_school_clean$math_z_score <- (nys_school_clean$mean_math_score-mean(nys_school_clean$mean_math_score))/sd(nys_school_clean$mean_math_score)
+nys_school_clean$ela_z_score <- (nys_school_clean$mean_ela_score-mean(nys_school_clean$mean_ela_score))/sd(nys_school_clean$mean_ela_score)
+```
+
+## Combine the data
+```{r Inner Join the data}
+nys_combined <- nys_school_clean %>% merge(y = county, by = c('county_name','year'))
+summary(nys_combined)
+```
+
+## Create Summary Tables
+
+```{r}
+county_poverty <- nys_combined %>% group_by(county_name,year) %>% select(total_enroll,per_free_lunch,per_reduced_lunch,county_per_poverty,poverty_level) %>% ungroup()
+
+top5 <- nys_combined %>% select(county_per_poverty,poverty_level,per_free_lunch,per_reduced_lunch,math_z_score,ela_z_score) %>% arrange(desc(county_per_poverty)) %>% head(5)
+
+bot5 <- nys_combined %>% select(county_per_poverty,poverty_level,per_free_lunch,per_reduced_lunch,math_z_score,ela_z_score) %>% arrange(county_per_poverty) %>% head(5)
+
+county_poverty
+top5
+bot5
+```
+
+## Visualization
+```{r}
+# Free Lunch vs Test
+nys_combined %>% filter(year==2012) %>% ggplot() +
+  geom_point(aes(x=per_free_lunch,y=math_z_score)) + scale_size_continuous(name="Test vs Free Lunch")
+
+# Reduced Lunch vs Test
+nys_combined %>% ggplot() +
+  geom_point(aes(x=per_reduced_lunch,y=math_z_score)) + scale_size_continuous(name="Test vs Reduced Lunch")
+
+# Test Scores By poverty Level Overtime
+nys_combined %>% group_by(year,poverty_level) %>% summarize(math_z_score = mean(math_z_score))  %>% ungroup() %>% ggplot()+
+  geom_line(aes(x=year,y=math_z_score,col=poverty_level))
+```
